@@ -1,0 +1,186 @@
+{
+  "project": {
+    "title": "LAMD Left Panel — IA & Flows",
+    "author": "AEON Communications",
+    "version": "v1.0"
+  },
+  "canvas": {
+    "width": 1280,
+    "height": 720,
+    "theme": {
+      "bg": "#FAFAFC",
+      "ink": "#111",
+      "accent": "#2B6CB0",
+      "muted": "#999"
+    }
+  },
+  "ia": {
+    "scope": [
+      "Left Graphic Panel Only",
+      "27\" FHD (1920×1080)",
+      "Avoid red alerts",
+      "Security labels required"
+    ],
+    "zones": [
+      {
+        "id": "Z5",
+        "label": "System Status",
+        "x": 40,
+        "y": 80,
+        "w": 1200,
+        "h": 40,
+        "fill": "#FFF7F0"
+      },
+      {
+        "id": "Z2",
+        "label": "Layer Controls",
+        "x": 40,
+        "y": 130,
+        "w": 180,
+        "h": 500,
+        "fill": "#F3F7FF"
+      },
+      {
+        "id": "Z3",
+        "label": "KPI Mini-View",
+        "x": 230,
+        "y": 130,
+        "w": 240,
+        "h": 120,
+        "fill": "#FFFDE7"
+      },
+      {
+        "id": "Z4",
+        "label": "Legend & Scale",
+        "x": 230,
+        "y": 590,
+        "w": 1010,
+        "h": 40,
+        "fill": "#EEF9FF"
+      },
+      {
+        "id": "Z1",
+        "label": "Main Canvas",
+        "x": 230,
+        "y": 260,
+        "w": 1010,
+        "h": 320,
+        "fill": "#EEF5EE"
+      }
+    ],
+    "components": [
+      {
+        "zone": "Z1",
+        "title": "Range×Altitude Grid",
+        "id": "C-Grid"
+      },
+      {
+        "zone": "Z1",
+        "title": "Track Symbols & Height Bars",
+        "id": "C-TrackBars"
+      },
+      {
+        "zone": "Z1",
+        "title": "Motion Trails (6–12s)",
+        "id": "C-Trails"
+      },
+      {
+        "zone": "Z1",
+        "title": "FOV/Engagement Bands",
+        "id": "C-FOV"
+      },
+      {
+        "zone": "Z2",
+        "title": "Layer Toggles (2.5D/Trail/FOV)",
+        "id": "C-Layers"
+      },
+      {
+        "zone": "Z3",
+        "title": "KPI Badges (TSA/FPS/Misassoc)",
+        "id": "C-KPI"
+      },
+      {
+        "zone": "Z5",
+        "title": "FPS/lag_ms/rollback",
+        "id": "C-Status"
+      },
+      {
+        "zone": "Z4",
+        "title": "Legend/Units/Abbrev",
+        "id": "C-Legend"
+      }
+    ]
+  },
+  "flows": {
+    "lanes": [
+      "Operator UI",
+      "Render Engine",
+      "KPI Logic",
+      "System Status",
+      "Logger"
+    ],
+    "items": [
+      {
+        "id": "UF-01",
+        "name": "Saturation SA",
+        "steps": [
+          {
+            "lane": "Operator UI",
+            "text": "Check Z1 cues",
+            "out": "Baseline LOD"
+          },
+          {
+            "lane": "Render Engine",
+            "text": "Compute density",
+            "out": "LOD level"
+          },
+          {
+            "lane": "Operator UI",
+            "text": "Toggle FOV if needed",
+            "out": "Layer state"
+          },
+          {
+            "lane": "KPI Logic",
+            "text": "Update TSA estimate",
+            "out": "KPI refresh"
+          }
+        ]
+      },
+      {
+        "id": "EF-01",
+        "name": "Threshold & Rollback",
+        "steps": [
+          {
+            "lane": "System Status",
+            "text": "Detect lag>500ms or FPS<30(3s)",
+            "out": "Alert badge"
+          },
+          {
+            "lane": "Render Engine",
+            "text": "Auto rollback to 2D if 5s persists",
+            "out": "rollback=2D"
+          },
+          {
+            "lane": "Logger",
+            "text": "Record reason/owner/time",
+            "out": "audit_log"
+          }
+        ]
+      }
+    ],
+    "decisions": [
+      {
+        "id": "D-01",
+        "cond": "FPS ≥ 30 ?",
+        "yes": "Keep LOD",
+        "no": "Increase LOD"
+      },
+      {
+        "id": "D-02",
+        "cond": "lag_ms ≤ 500 ?",
+        "yes": "Normal",
+        "no": "Warn / EF-01"
+      }
+    ]
+  }
+}

@@ -1,0 +1,282 @@
+
+import json, math, io, os
+import streamlit as st
+from typing import Dict, List, Any, Tuple
+
+st.set_page_config(page_title="UI Architect — PPT‑style IA & Flow", layout="wide")
+st.title("UI Architect — PPT‑style IA & Flow (PPT 스타일 도식화)")
+st.caption("JSON 스펙 기반으로 IA/Flow를 PPT 스타일 SVG로 생성합니다. GitHub/Streamlit 공유용. (외부 패키지 불필요)")
+
+# ----------------------------
+# SVG helpers (no external deps)
+# ----------------------------
+def svg_header(w:int, h:int) -> str:
+    return f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
+def svg_footer() -> str:
+    return "</svg>"
+def rect(x,y,w,h,rx=12,ry=12,fill="#FFFFFF",stroke="#222",sw=1.4) -> str:
+    return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" ry="{ry}" fill="{fill}" stroke="{stroke}" stroke-width="{sw}"/>'
+def text(x,y,s,anchor="start",size=14,fill="#111",weight="400") -> str:
+    return f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill}" font-weight="{weight}" text-anchor="{anchor}" font-family="Segoe UI, Arial, Helvetica">{s}</text>'
+def line(x1,y1,x2,y2,stroke="#999",sw=1.2) -> str:
+    return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/>'
+def arrow(x1,y1,x2,y2,color="#555",sw=1.4) -> str:
+    seg = line(x1,y1,x2,y2,color,sw)
+    ang = math.atan2(y2-y1, x2-x1)
+    hx1 = x2 - 9*math.cos(ang - math.pi/6); hy1 = y2 - 9*math.sin(ang - math.pi/6)
+    hx2 = x2 - 9*math.cos(ang + math.pi/6); hy2 = y2 - 9*math.sin(ang + math.pi/6)
+    head = f'<path d="M{x2},{y2} L{hx1},{hy1} L{hx2},{hy2} Z" fill="{color}"/>'
+    return seg + head
+def diamond(cx,cy,w,h,fill="#FFF7E6",stroke="#C88600",sw=1.4):
+    pts = [(cx,cy-h/2),(cx+w/2,cy),(cx,cy+h/2),(cx-w/2,cy)]
+    pts_s = " ".join([f"{px},{py}" for px,py in pts])
+    return f'<polygon points="{pts_s}" fill="{fill}" stroke="{stroke}" stroke-width="{sw}"/>'
+def wrap_lines(s:str, max_chars:int=28) -> List[str]:
+    words = s.split()
+    lines, cur = [], ""
+    for w in words:
+        if len(cur)+len(w)+1 <= max_chars:
+            cur = (cur+" "+w).strip()
+        else:
+            lines.append(cur); cur = w
+    if cur: lines.append(cur)
+    return lines or [""]
+
+# ----------------------------
+# Default sample spec
+# ----------------------------
+default_spec = {
+  "project": {"title": "LAMD Left Panel — IA & Flows", "author": "AEON Communications", "version": "v1.0"},
+  "canvas": {"width": 1280, "height": 720, "theme": {"bg":"#FAFAFC","ink":"#111","accent":"#2B6CB0","muted":"#999"}},
+  "ia": {
+    "scope": ["Left Graphic Panel Only", "27\\" FHD (1920×1080)", "Avoid red alerts", "Security labels required"],
+    "zones": [
+      {"id": "Z5", "label": "System Status", "x": 40, "y": 80, "w": 1200, "h": 40, "fill":"#FFF7F0"},
+      {"id": "Z2", "label": "Layer Controls", "x": 40, "y": 130, "w": 180, "h": 500, "fill":"#F3F7FF"},
+      {"id": "Z3", "label": "KPI Mini-View", "x": 230, "y": 130, "w": 240, "h": 120, "fill":"#FFFDE7"},
+      {"id": "Z4", "label": "Legend & Scale", "x": 230, "y": 590, "w": 1010, "h": 40, "fill":"#EEF9FF"},
+      {"id": "Z1", "label": "Main Canvas", "x": 230, "y": 260, "w": 1010, "h": 320, "fill":"#EEF5EE"}
+    ],
+    "components": [
+      {"zone":"Z1", "title":"Range×Altitude Grid", "id":"C-Grid"},
+      {"zone":"Z1", "title":"Track Symbols & Height Bars", "id":"C-TrackBars"},
+      {"zone":"Z1", "title":"Motion Trails (6–12s)", "id":"C-Trails"},
+      {"zone":"Z1", "title":"FOV/Engagement Bands", "id":"C-FOV"},
+      {"zone":"Z2", "title":"Layer Toggles (2.5D/Trail/FOV)", "id":"C-Layers"},
+      {"zone":"Z3", "title":"KPI Badges (TSA/FPS/Misassoc)", "id":"C-KPI"},
+      {"zone":"Z5", "title":"FPS/lag_ms/rollback", "id":"C-Status"},
+      {"zone":"Z4", "title":"Legend/Units/Abbrev", "id":"C-Legend"}
+    ]
+  },
+  "flows": {
+    "lanes": ["Operator UI","Render Engine","KPI Logic","System Status","Logger"],
+    "items": [
+      {"id":"UF-01","name":"Saturation SA","steps":[
+        {"lane":"Operator UI","text":"Check Z1 cues","out":"Baseline LOD"},
+        {"lane":"Render Engine","text":"Compute density","out":"LOD level"},
+        {"lane":"Operator UI","text":"Toggle FOV if needed","out":"Layer state"},
+        {"lane":"KPI Logic","text":"Update TSA estimate","out":"KPI refresh"}
+      ]},
+      {"id":"EF-01","name":"Threshold & Rollback","steps":[
+        {"lane":"System Status","text":"Detect lag>500ms or FPS<30(3s)","out":"Alert badge"},
+        {"lane":"Render Engine","text":"Auto rollback to 2D if 5s persists","out":"rollback=2D"},
+        {"lane":"Logger","text":"Record reason/owner/time","out":"audit_log"}
+      ]}
+    ],
+    "decisions":[
+      {"id":"D-01","cond":"FPS ≥ 30 ?","yes":"Keep LOD","no":"Increase LOD"},
+      {"id":"D-02","cond":"lag_ms ≤ 500 ?","yes":"Normal","no":"Warn / EF-01"}
+    ]
+  }
+}
+
+# ----------------------------------------
+# Inputs: JSON spec (paste or upload)
+# ----------------------------------------
+left, right = st.columns([0.48, 0.52], gap="large")
+
+with left:
+    st.subheader("1) 스펙 입력")
+    mode = st.radio("입력 방식", ["샘플 사용", "JSON 붙여넣기", "JSON 업로드"], horizontal=True)
+    spec: Dict[str, Any] = {}
+    if mode == "샘플 사용":
+        spec = default_spec
+        st.code(json.dumps(spec, indent=2, ensure_ascii=False), language="json")
+    elif mode == "JSON 붙여넣기":
+        txt = st.text_area("JSON 스펙", value=json.dumps(default_spec, ensure_ascii=False, indent=2), height=320)
+        try:
+            spec = json.loads(txt)
+        except Exception as e:
+            st.error(f"JSON 파싱 오류: {e}")
+    else:
+        up = st.file_uploader("JSON 파일 업로드", type=["json"])
+        if up:
+            try:
+                spec = json.loads(up.read().decode("utf-8"))
+                st.success("JSON 로드 완료")
+            except Exception as e:
+                st.error(f"파싱 오류: {e}")
+        else:
+            st.info("JSON 파일을 업로드하세요.")
+
+with right:
+    st.subheader("2) 출력 형식")
+    canv = spec.get("canvas", {})
+    W = int(canv.get("width", 1280)); H = int(canv.get("height", 720))
+    theme = canv.get("theme", {"bg":"#FAFAFC","ink":"#111","accent":"#2B6CB0","muted":"#999"})
+    st.write(f"Canvas: {W}×{H}")
+    st.write("Theme:", theme)
+
+# ----------------------------
+# SVG helpers used below (duplicate-safe if re-run)
+# ----------------------------
+def _svg_header(w:int, h:int) -> str: return svg_header(w,h)
+def _svg_footer() -> str: return svg_footer()
+def _rect(*args, **kwargs) -> str: return rect(*args, **kwargs)
+def _text(*args, **kwargs) -> str: return text(*args, **kwargs)
+def _line(*args, **kwargs) -> str: return line(*args, **kwargs)
+def _arrow(*args, **kwargs) -> str: return arrow(*args, **kwargs)
+def _diamond(*args, **kwargs) -> str: return diamond(*args, **kwargs)
+
+from streamlit.components.v1 import html as st_html
+
+# ----------------------------------------
+# IA Diagram (PPT-style)
+# ----------------------------------------
+st.markdown("---")
+st.header("IA Diagram (PPT 스타일)")
+
+def render_ia(spec:Dict[str,Any]) -> str:
+    ia = spec.get("ia", {})
+    zones = ia.get("zones", [])
+    comps = ia.get("components", [])
+    scope_lines = ia.get("scope", [])
+    canv = spec.get("canvas", {})
+    W = int(canv.get("width", 1280)); H = int(canv.get("height", 720))
+    svg = [_svg_header(W, H), _rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
+    title = spec.get("project",{}).get("title","IA Diagram")
+    svg.append(_text(32, 44, title, size=22, weight="600"))
+    svg.append(_rect(28, 60, W-56, 60, rx=8, ry=8, fill="#FFFFFF", stroke="#D0D6E0"))
+    scope_txt = "  •  ".join(scope_lines)
+    svg.append(_text(40, 90, "Scope: " + scope_txt, size=14, fill="#333"))
+    svg.append(_text(32, 140, "Screen Zoning", size=16, weight="600"))
+    for z in zones:
+        zx,zy,zw,zh = int(z.get("x",0)), int(z.get("y",0)), int(z.get("w",100)), int(z.get("h",80))
+        fill = z.get("fill", "#F3F7FF")
+        svg.append(_rect(zx,zy,zw,zh,rx=10,ry=10,fill=fill,stroke="#B8C2D6"))
+        svg.append(_text(zx+10, zy+24, f"{z['id']}  —  {z.get('label','')}", size=14, weight="600"))
+    svg.append(_text(W-360, 140, "Components (by Zone)", size=16, weight="600"))
+    y = 170
+    for c in comps:
+        svg.append(_rect(W-380, y-18, 352, 36, rx=8, ry=8, fill="#FFFFFF", stroke="#E3E7EF"))
+        svg.append(_text(W-370, y+4, f"[{c.get('zone','?')}] {c.get('title','')}", size=13, fill="#222"))
+        y += 44
+    svg.append(_svg_footer())
+    return "".join(svg)
+
+svg_ia = render_ia(spec)
+st_html(f'<div style="border:1px solid #e3e3e3;border-radius:10px;overflow:auto;height:560px">{svg_ia}</div>', height=580)
+st.download_button("Download IA SVG", data=svg_ia.encode("utf-8"), file_name="ia_diagram.svg", mime="image/svg+xml")
+
+# ----------------------------------------
+# Flow Diagram (PPT-style, Swimlanes)
+# ----------------------------------------
+st.markdown("---")
+st.header("Flow Diagram (PPT 스타일, 스윔레인)")
+
+def wrap_lines2(s:str, max_chars:int=28):
+    words = s.split()
+    lines, cur = [], ""
+    for w in words:
+        if len(cur)+len(w)+1 <= max_chars:
+            cur = (cur+" "+w).strip()
+        else:
+            lines.append(cur); cur = w
+    if cur: lines.append(cur)
+    return lines or [""]
+
+def render_flow_item(spec:Dict[str,Any], item:Dict[str,Any], y_offset:int) -> Tuple[str,int]:
+    lanes: List[str] = spec.get("flows",{}).get("lanes",["Flow"])
+    lane_h = 90
+    lane_gap = 8
+    canv = spec.get("canvas", {}); W = int(canv.get("width",1280))
+    svg=[]; lane_y={}
+    for i,l in enumerate(lanes):
+        y = y_offset + i*(lane_h+lane_gap)
+        lane_y[l]=y
+        svg.append(_rect(28, y, W-56, lane_h, rx=10, ry=10, fill="#FBFCFF", stroke="#E1E6F0"))
+        svg.append(_text(40, y+22, l, size=13, fill="#4A5568", weight="600"))
+    steps: List[Dict[str,Any]] = item.get("steps",[])
+    cols = max(3, len(steps))
+    col_w = (W-180)/cols
+    nodes=[]
+    for idx, s in enumerate(steps):
+        lane = s.get("lane", lanes[min(idx,len(lanes)-1)])
+        y = lane_y.get(lane, y_offset) + lane_h/2
+        x = 100 + col_w*(idx+0.5)
+        svg.append(_rect(x-110, y-24, 220, 48, rx=10, ry=10, fill="#FFFFFF", stroke="#A0AEC0"))
+        lines = wrap_lines2(s.get("text",""), 26)
+        for j,ln in enumerate(lines[:2]):
+            svg.append(_text(x, y-6+14*j, ln, anchor="middle", size=13))
+        out = s.get("out","")
+        if out:
+            svg.append(_text(x, y+26, f"→ {out}", anchor="middle", size=11, fill="#555"))
+        nodes.append((x,y))
+        if idx>0:
+            px,py = nodes[idx-1]
+            svg.append(_arrow(px+110, py, x-110, y, "#6B7280"))
+    svg.insert(0, _text(32, y_offset-10, f"{item.get('id','FLOW')} — {item.get('name','')}", size=16, weight="700"))
+    return "".join(svg), y_offset + len(lanes)*(lane_h+lane_gap) + 40
+
+def render_flows(spec:Dict[str,Any]) -> str:
+    canv = spec.get("canvas", {})
+    W = int(canv.get("width",1280)); H = int(canv.get("height",720))
+    items: List[Dict[str,Any]] = spec.get("flows",{}).get("items",[])
+    svg=[_svg_header(W, H), _rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
+    y = 60
+    svg.append(_text(32, 36, "Flows (Swimlanes)", size=22, weight="600"))
+    for it in items:
+        block, y = render_flow_item(spec, it, y+30)
+        svg.append(block)
+        y += 20
+    svg.append(_svg_footer())
+    return "".join(svg)
+
+svg_flow = render_flows(spec)
+st_html(f'<div style="border:1px solid #e3e3e3;border-radius:10px;overflow:auto;height:560px">{svg_flow}</div>', height=580)
+st.download_button("Download Flows SVG", data=svg_flow.encode("utf-8"), file_name="flows_diagram.svg", mime="image/svg+xml")
+
+# ----------------------------------------
+# Decision Points
+# ----------------------------------------
+st.markdown("---")
+st.header("Decision Points (Yes/No)")
+
+def render_decisions(spec:Dict[str,Any]) -> str:
+    decs = spec.get("flows",{}).get("decisions",[])
+    canv = spec.get("canvas", {}); W = int(canv.get("width",1280))
+    rows = max(1, len(decs))
+    H = 120 + rows*90
+    svg=[_svg_header(W, H), _rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
+    svg.append(_text(32, 36, "Decision Points", size=22, weight="600"))
+    for i,d in enumerate(decs):
+        y = 90 + i*90
+        cx = 200
+        svg.append(_diamond(cx, y, 180, 70))
+        svg.append(_text(cx, y-6, d.get("id","D-?"), anchor="middle", size=14, weight="700"))
+        svg.append(_text(cx, y+16, d.get("cond",""), anchor="middle", size=12))
+        svg.append(_rect(cx+200, y-22, 260, 44, rx=10, ry=10, fill="#EFFFF5", stroke="#49A36B"))
+        svg.append(_text(cx+330, y+4, d.get("yes",""), anchor="middle", size=12))
+        svg.append(_arrow(cx+90, y, cx+200, y, "#4A9"))
+        svg.append(_rect(cx-460, y-22, 260, 44, rx=10, ry=10, fill="#FFF5F5", stroke="#CC6666"))
+        svg.append(_text(cx-330, y+4, d.get("no",""), anchor="middle", size=12))
+        svg.append(_arrow(cx-90, y, cx-200, y, "#C66"))
+    svg.append(_svg_footer())
+    return "".join(svg)
+
+svg_dec = render_decisions(spec)
+st_html(f'<div style="border:1px solid #e3e3e3;border-radius:10px;overflow:auto;height:420px">{svg_dec}</div>', height=440)
+st.download_button("Download Decisions SVG", data=svg_dec.encode("utf-8"), file_name="decisions.svg", mime="image/svg+xml")
+
+st.markdown("---")
+st.caption("JSON 스펙만으로 PPT 스타일 IA/Flow/Decision 도식 생성 · SVG 다운로드 가능. GitHub Pages/Streamlit Cloud에서 그대로 구동.")
