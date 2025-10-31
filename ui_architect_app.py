@@ -2,13 +2,14 @@
 import json, math, io, os
 import streamlit as st
 from typing import Dict, List, Any, Tuple
+from streamlit.components.v1 import html as st_html
 
-st.set_page_config(page_title="UI Architect — PPT-style IA & Flow", layout="wide")
-st.title("UI Architect — PPT-style IA & Flow (PPT style diagrams)")
-st.caption("JSON spec -> PPT-style IA/Flow/Decision as SVG. (ASCII-only to avoid Unicode issues)")
+st.set_page_config(page_title="UI Architect — PPT-style IA & Flow (v2)", layout="wide")
+st.title("UI Architect — PPT-style IA & Flow (v2)")
+st.caption("Zoom & scroll improved. Use sliders to fit your screen.")
 
 # ----------------------------
-# SVG helpers (no external deps)
+# SVG helpers
 # ----------------------------
 def svg_header(w:int, h:int) -> str:
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
@@ -44,19 +45,19 @@ def wrap_lines(s:str, max_chars:int=28) -> List[str]:
     return lines or [""]
 
 # ----------------------------
-# Default sample spec (ASCII-safe)
+# Default sample (ASCII-safe)
 # ----------------------------
 default_spec = {
   "project": {"title": "LAMD Left Panel - IA & Flows", "author": "AEON Communications", "version": "v1.0"},
-  "canvas": {"width": 1280, "height": 720, "theme": {"bg":"#FAFAFC","ink":"#111","accent":"#2B6CB0","muted":"#999"}},
+  "canvas": {"width": 1600, "height": 900, "theme": {"bg":"#FAFAFC","ink":"#111","accent":"#2B6CB0","muted":"#999"}},
   "ia": {
     "scope": ["Left Graphic Panel Only", "27\" FHD (1920x1080)", "Avoid red alerts", "Security labels required"],
     "zones": [
-      {"id": "Z5", "label": "System Status", "x": 40, "y": 80, "w": 1200, "h": 40, "fill":"#FFF7F0"},
-      {"id": "Z2", "label": "Layer Controls", "x": 40, "y": 130, "w": 180, "h": 500, "fill":"#F3F7FF"},
-      {"id": "Z3", "label": "KPI Mini-View", "x": 230, "y": 130, "w": 240, "h": 120, "fill":"#FFFDE7"},
-      {"id": "Z4", "label": "Legend & Scale", "x": 230, "y": 590, "w": 1010, "h": 40, "fill":"#EEF9FF"},
-      {"id": "Z1", "label": "Main Canvas", "x": 230, "y": 260, "w": 1010, "h": 320, "fill":"#EEF5EE"}
+      {"id": "Z5", "label": "System Status", "x": 40, "y": 80, "w": 1500, "h": 50, "fill":"#FFF7F0"},
+      {"id": "Z2", "label": "Layer Controls", "x": 40, "y": 140, "w": 220, "h": 650, "fill":"#F3F7FF"},
+      {"id": "Z3", "label": "KPI Mini-View", "x": 280, "y": 140, "w": 280, "h": 150, "fill":"#FFFDE7"},
+      {"id": "Z4", "label": "Legend & Scale", "x": 280, "y": 770, "w": 1260, "h": 40, "fill":"#EEF9FF"},
+      {"id": "Z1", "label": "Main Canvas", "x": 280, "y": 310, "w": 1260, "h": 450, "fill":"#EEF5EE"}
     ],
     "components": [
       {"zone":"Z1", "title":"Range x Altitude Grid", "id":"C-Grid"},
@@ -91,87 +92,59 @@ default_spec = {
   }
 }
 
-# ----------------------------------------
-# Inputs: JSON spec (paste or upload)
-# ----------------------------------------
-left, right = st.columns([0.48, 0.52], gap="large")
+# ----------------------------
+# Controls (zoom/height per section)
+# ----------------------------
+with st.sidebar:
+    st.header("Viewport Controls")
+    ia_zoom = st.slider("IA Zoom (%)", 50, 250, 100, 5)
+    ia_h = st.slider("IA Viewport Height (px)", 400, 1200, 700, 50)
+    fl_zoom = st.slider("Flow Zoom (%)", 50, 250, 100, 5)
+    fl_h = st.slider("Flow Viewport Height (px)", 400, 1200, 700, 50)
+    dc_zoom = st.slider("Decision Zoom (%)", 50, 250, 100, 5)
+    dc_h = st.slider("Decision Viewport Height (px)", 300, 1000, 500, 50)
 
-with left:
-    st.subheader("1) Spec Input")
-    mode = st.radio("Input Mode", ["Use Sample", "Paste JSON", "Upload JSON"], horizontal=True)
-    spec: Dict[str, Any] = {}
-    if mode == "Use Sample":
-        spec = default_spec
-        st.code(json.dumps(spec, indent=2), language="json")
-    elif mode == "Paste JSON":
-        txt = st.text_area("JSON Spec", value=json.dumps(default_spec, indent=2), height=320)
-        try:
-            spec = json.loads(txt)
-        except Exception as e:
-            st.error(f"JSON parse error: {e}")
-    else:
-        up = st.file_uploader("Upload JSON", type=["json"])
-        if up:
-            try:
-                spec = json.loads(up.read().decode("utf-8"))
-                st.success("JSON loaded")
-            except Exception as e:
-                st.error(f"Parse error: {e}")
-        else:
-            st.info("Upload a JSON file.")
-
-with right:
-    st.subheader("2) Output Canvas")
-    canv = spec.get("canvas", {})
-    W = int(canv.get("width", 1280)); H = int(canv.get("height", 720))
-    theme = canv.get("theme", {"bg":"#FAFAFC","ink":"#111","accent":"#2B6CB0","muted":"#999"})
-    st.write(f"Canvas: {W}x{H}")
-    st.write("Theme:", theme)
-
-# ----------------------------------------
-# Helpers
-# ----------------------------------------
-from streamlit.components.v1 import html as st_html
-
-def render_ia(spec:Dict[str,Any]) -> str:
+# ----------------------------
+# Renderers
+# ----------------------------
+def render_ia(spec:Dict[str,Any]) -> Tuple[str, int, int]:
     ia = spec.get("ia", {})
     zones = ia.get("zones", [])
     comps = ia.get("components", [])
     scope_lines = ia.get("scope", [])
     canv = spec.get("canvas", {})
-    W = int(canv.get("width", 1280)); H = int(canv.get("height", 720))
+    W = int(canv.get("width", 1600)); H = int(canv.get("height", 900))
     svg = [svg_header(W, H), rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
     title = spec.get("project",{}).get("title","IA Diagram")
-    svg.append(text(32, 44, title, size=22, weight="600"))
-    svg.append(rect(28, 60, W-56, 60, rx=8, ry=8, fill="#FFFFFF", stroke="#D0D6E0"))
+    svg.append(text(32, 44, title, size=24, weight="600"))
+    svg.append(rect(28, 60, W-56, 70, rx=10, ry=10, fill="#FFFFFF", stroke="#D0D6E0"))
     scope_txt = "  •  ".join(scope_lines)
-    svg.append(text(40, 90, "Scope: " + scope_txt, size=14, fill="#333"))
-    svg.append(text(32, 140, "Screen Zoning", size=16, weight="600"))
+    svg.append(text(40, 96, "Scope: " + scope_txt, size=14, fill="#333"))
+    svg.append(text(32, 150, "Screen Zoning", size=18, weight="600"))
     for z in zones:
         zx,zy,zw,zh = int(z.get("x",0)), int(z.get("y",0)), int(z.get("w",100)), int(z.get("h",80))
         fill = z.get("fill", "#F3F7FF")
-        svg.append(rect(zx,zy,zw,zh,rx=10,ry=10,fill=fill,stroke="#B8C2D6"))
-        svg.append(text(zx+10, zy+24, f"{z['id']}  -  {z.get('label','')}", size=14, weight="600"))
-    svg.append(text(W-360, 140, "Components (by Zone)", size=16, weight="600"))
-    y = 170
+        svg.append(rect(zx,zy,zw,zh,rx=12,ry=12,fill=fill,stroke="#B8C2D6"))
+        svg.append(text(zx+10, zy+26, f"{z['id']} - {z.get('label','')}", size=14, weight="600"))
+    svg.append(text(W-420, 150, "Components (by Zone)", size=18, weight="600"))
+    y = 180
     for c in comps:
-        svg.append(rect(W-380, y-18, 352, 36, rx=8, ry=8, fill="#FFFFFF", stroke="#E3E7EF"))
-        svg.append(text(W-370, y+4, f"[{c.get('zone','?')}] {c.get('title','')}", size=13, fill="#222"))
+        svg.append(rect(W-440, y-18, 392, 36, rx=10, ry=10, fill="#FFFFFF", stroke="#E3E7EF"))
+        svg.append(text(W-430, y+4, f"[{c.get('zone','?')}] {c.get('title','')}", size=13, fill="#222"))
         y += 44
     svg.append(svg_footer())
-    return "".join(svg)
+    return "".join(svg), W, H
 
-def render_flow_item(spec:Dict[str,Any], item:Dict[str,Any], y_offset:int) -> Tuple[str,int]:
+def render_flow_item(spec:Dict[str,Any], item:Dict[str,Any], y_offset:int, W:int) -> Tuple[str,int]:
     lanes: List[str] = spec.get("flows",{}).get("lanes",["Flow"])
-    lane_h = 90
-    lane_gap = 8
-    canv = spec.get("canvas", {}); W = int(canv.get("width",1280))
+    lane_h = 100
+    lane_gap = 10
     svg=[]; lane_y={}
     for i,l in enumerate(lanes):
         y = y_offset + i*(lane_h+lane_gap)
         lane_y[l]=y
-        svg.append(rect(28, y, W-56, lane_h, rx=10, ry=10, fill="#FBFCFF", stroke="#E1E6F0"))
-        svg.append(text(40, y+22, l, size=13, fill="#4A5568", weight="600"))
+        svg.append(rect(28, y, W-56, lane_h, rx=12, ry=12, fill="#FBFCFF", stroke="#E1E6F0"))
+        svg.append(text(40, y+24, l, size=14, fill="#4A5568", weight="600"))
     steps: List[Dict[str,Any]] = item.get("steps",[])
     cols = max(3, len(steps))
     col_w = (W-180)/cols
@@ -180,76 +153,81 @@ def render_flow_item(spec:Dict[str,Any], item:Dict[str,Any], y_offset:int) -> Tu
         lane = s.get("lane", lanes[min(idx,len(lanes)-1)])
         y = lane_y.get(lane, y_offset) + lane_h/2
         x = 100 + col_w*(idx+0.5)
-        svg.append(rect(x-110, y-24, 220, 48, rx=10, ry=10, fill="#FFFFFF", stroke="#A0AEC0"))
-        lines = wrap_lines(s.get("text",""), 26)
+        svg.append(rect(x-120, y-26, 240, 52, rx=12, ry=12, fill="#FFFFFF", stroke="#A0AEC0"))
+        lines = wrap_lines(s.get("text",""), 28)
         for j,ln in enumerate(lines[:2]):
-            svg.append(text(x, y-6+14*j, ln, anchor="middle", size=13))
+            svg.append(text(x, y-6+16*j, ln, anchor="middle", size=14))
         out = s.get("out","")
         if out:
-            svg.append(text(x, y+26, f"-> {out}", anchor="middle", size=11, fill="#555"))
+            svg.append(text(x, y+28, f"-> {out}", anchor="middle", size=12, fill="#555"))
         nodes.append((x,y))
         if idx>0:
             px,py = nodes[idx-1]
-            svg.append(arrow(px+110, py, x-110, y, "#6B7280"))
-    svg.insert(0, text(32, y_offset-10, f"{item.get('id','FLOW')} - {item.get('name','')}", size=16, weight="700"))
-    return "".join(svg), y_offset + len(lanes)*(lane_h+lane_gap) + 40
+            svg.append(arrow(px+120, py, x-120, y, "#6B7280"))
+    svg.insert(0, text(32, y_offset-12, f"{item.get('id','FLOW')} - {item.get('name','')}", size=18, weight="700"))
+    return "".join(svg), y_offset + len(lanes)*(lane_h+lane_gap) + 50
 
-def render_flows(spec:Dict[str,Any]) -> str:
+def render_flows(spec:Dict[str,Any]) -> Tuple[str,int,int]:
     canv = spec.get("canvas", {})
-    W = int(canv.get("width",1280)); H = int(canv.get("height",720))
+    W = int(canv.get("width",1600)); H = int(canv.get("height",900))
     items: List[Dict[str,Any]] = spec.get("flows",{}).get("items",[])
     svg=[svg_header(W, H), rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
-    y = 60
-    svg.append(text(32, 36, "Flows (Swimlanes)", size=22, weight="600"))
+    y = 70
+    svg.append(text(32, 40, "Flows (Swimlanes)", size=22, weight="600"))
     for it in items:
-        block, y = render_flow_item(spec, it, y+30)
+        block, y = render_flow_item(spec, it, y+30, W)
         svg.append(block)
         y += 20
     svg.append(svg_footer())
-    return "".join(svg)
+    return "".join(svg), W, max(H, y+60)
 
-def render_decisions(spec:Dict[str,Any]) -> str:
+def render_decisions(spec:Dict[str,Any]) -> Tuple[str,int,int]:
     decs = spec.get("flows",{}).get("decisions",[])
-    canv = spec.get("canvas", {}); W = int(canv.get("width",1280))
+    canv = spec.get("canvas", {}); W = int(canv.get("width",1600))
     rows = max(1, len(decs))
-    H = 120 + rows*90
+    H = 140 + rows*110
     svg=[svg_header(W, H), rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
-    svg.append(text(32, 36, "Decision Points", size=22, weight="600"))
+    svg.append(text(32, 40, "Decision Points", size=22, weight="600"))
     for i,d in enumerate(decs):
-        y = 90 + i*90
-        cx = 200
-        svg.append(diamond(cx, y, 180, 70))
-        svg.append(text(cx, y-6, d.get("id","D-?"), anchor="middle", size=14, weight="700"))
-        svg.append(text(cx, y+16, d.get("cond",""), anchor="middle", size=12))
-        svg.append(rect(cx+200, y-22, 260, 44, rx=10, ry=10, fill="#EFFFF5", stroke="#49A36B"))
-        svg.append(text(cx+330, y+4, d.get("yes",""), anchor="middle", size=12))
-        svg.append(arrow(cx+90, y, cx+200, y, "#4A9"))
-        svg.append(rect(cx-460, y-22, 260, 44, rx=10, ry=10, fill="#FFF5F5", stroke="#CC6666"))
-        svg.append(text(cx-330, y+4, d.get("no",""), anchor="middle", size=12))
-        svg.append(arrow(cx-90, y, cx-200, y, "#C66"))
+        y = 110 + i*110
+        cx = 260
+        svg.append(diamond(cx, y, 200, 80))
+        svg.append(text(cx, y-8, d.get("id","D-?"), anchor="middle", size=14, weight="700"))
+        svg.append(text(cx, y+18, d.get("cond",""), anchor="middle", size=12))
+        svg.append(rect(cx+260, y-26, 300, 52, rx=12, ry=12, fill="#EFFFF5", stroke="#49A36B"))
+        svg.append(text(cx+410, y+6, d.get("yes",""), anchor="middle", size=13))
+        svg.append(arrow(cx+100, y, cx+260, y, "#4A9"))
+        svg.append(rect(cx-560, y-26, 300, 52, rx=12, ry=12, fill="#FFF5F5", stroke="#CC6666"))
+        svg.append(text(cx-410, y+6, d.get("no",""), anchor="middle", size=13))
+        svg.append(arrow(cx-100, y, cx-260, y, "#C66"))
     svg.append(svg_footer())
-    return "".join(svg)
+    return "".join(svg), W, H
+
+def show_svg(svg_text:str, width:int, height:int, zoom:int, viewport_h:int, key:str):
+    scale = zoom / 100.0
+    # Outer scrollable box (full width), inner scaled canvas
+    html = f'''
+    <div style="width:100%; border:1px solid #e3e3e3; border-radius:10px; background:#fff; overflow:auto; height:{viewport_h}px;">
+      <div style="transform: scale({scale}); transform-origin: top left; width:{width}px; height:{height}px;">
+        {svg_text}
+      </div>
+    </div>
+    '''
+    st_html(html, height=viewport_h+20)
 
 # ----------------------------
-# Render
+# Render sections with controls
 # ----------------------------
-st.markdown("---")
-st.header("IA Diagram (PPT style)")
-svg_ia = render_ia(default_spec if 'spec' not in locals() or not spec else spec)
-st_html(f'<div style="border:1px solid #e3e3e3;border-radius:10px;overflow:auto;height:560px">{svg_ia}</div>', height=580)
-st.download_button("Download IA SVG", data=svg_ia.encode("utf-8"), file_name="ia_diagram.svg", mime="image/svg+xml")
+spec = default_spec  # could add JSON input later if needed
 
-st.markdown("---")
-st.header("Flow Diagram (PPT style, Swimlanes)")
-svg_flow = render_flows(default_spec if 'spec' not in locals() or not spec else spec)
-st_html(f'<div style="border:1px solid #e3e3e3;border-radius:10px;overflow:auto;height:560px">{svg_flow}</div>', height=580)
-st.download_button("Download Flows SVG", data=svg_flow.encode("utf-8"), file_name="flows_diagram.svg", mime="image/svg+xml")
+st.markdown("### IA Diagram (PPT style)")
+svg_ia, W_ia, H_ia = render_ia(spec)
+show_svg(svg_ia, W_ia, H_ia, ia_zoom, ia_h, key="ia")
 
-st.markdown("---")
-st.header("Decision Points (Yes/No)")
-svg_dec = render_decisions(default_spec if 'spec' not in locals() or not spec else spec)
-st_html(f'<div style="border:1px solid #e3e3e3;border-radius:10px;overflow:auto;height:420px">{svg_dec}</div>', height=440)
-st.download_button("Download Decisions SVG", data=svg_dec.encode("utf-8"), file_name="decisions.svg", mime="image/svg+xml")
+st.markdown("### Flow Diagram (PPT style, Swimlanes)")
+svg_flow, W_fl, H_fl = render_flows(spec)
+show_svg(svg_flow, W_fl, H_fl, fl_zoom, fl_h, key="flow")
 
-st.markdown("---")
-st.caption("ASCII-only app file to avoid Unicode parser issues on some environments.")
+st.markdown("### Decision Points (Yes/No)")
+svg_dec, W_dc, H_dc = render_decisions(spec)
+show_svg(svg_dec, W_dc, H_dc, dc_zoom, dc_h, key="dec")
