@@ -1,26 +1,32 @@
 
-import json, math, io, os
+import json, math
 import streamlit as st
 from typing import Dict, List, Any, Tuple
 from streamlit.components.v1 import html as st_html
 
-st.set_page_config(page_title="UI Architect — PPT-style IA & Flow (v2)", layout="wide")
-st.title("UI Architect — PPT-style IA & Flow (v2)")
-st.caption("Zoom & scroll improved. Use sliders to fit your screen.")
+st.set_page_config(page_title="UI Architect — IA/Flow v3 (no cropping)", layout="wide")
+st.title("UI Architect — IA/Flow v3")
+st.caption("Fix: no internal SVG cropping (extra margins + translated content).")
 
-# ----------------------------
-# SVG helpers
-# ----------------------------
-def svg_header(w:int, h:int) -> str:
-    return f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">'
-def svg_footer() -> str:
-    return "</svg>"
+# ---------- helpers ----------
+def svg_skeleton(w:int, h:int, inner:str, margin:int=120, bg="#FAFAFC") -> str:
+    # Expand outer canvas by margin on four sides, and translate inner group.
+    W = w + margin*2
+    H = h + margin*2
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">'
+        f'<rect x="0" y="0" width="{W}" height="{H}" fill="{bg}" />'
+        f'<g transform="translate({margin},{margin})">'
+        f'{inner}'
+        f'</g></svg>'
+    )
+
 def rect(x,y,w,h,rx=12,ry=12,fill="#FFFFFF",stroke="#222",sw=1.4) -> str:
     return f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}" ry="{ry}" fill="{fill}" stroke="{stroke}" stroke-width="{sw}"/>'
 def text(x,y,s,anchor="start",size=14,fill="#111",weight="400") -> str:
     return f'<text x="{x}" y="{y}" font-size="{size}" fill="{fill}" font-weight="{weight}" text-anchor="{anchor}" font-family="Segoe UI, Arial, Helvetica">{s}</text>'
 def line(x1,y1,x2,y2,stroke="#999",sw=1.2) -> str:
-    return f'<line x1="{x1}" y="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/>'
+    return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{stroke}" stroke-width="{sw}"/>'
 def arrow(x1,y1,x2,y2,color="#555",sw=1.4) -> str:
     seg = line(x1,y1,x2,y2,color,sw)
     ang = math.atan2(y2-y1, x2-x1)
@@ -32,26 +38,22 @@ def diamond(cx,cy,w,h,fill="#FFF7E6",stroke="#C88600",sw=1.4):
     pts = [(cx,cy-h/2),(cx+w/2,cy),(cx,cy+h/2),(cx-w/2,cy)]
     pts_s = " ".join([f"{px},{py}" for px,py in pts])
     return f'<polygon points="{pts_s}" fill="{fill}" stroke="{stroke}" stroke-width="{sw}"/>'
-
-def wrap_lines(s:str, max_chars:int=28) -> List[str]:
-    words = s.split()
-    lines, cur = [], ""
+def wrap_lines(s:str, max_chars:int=28):
+    words = s.split(); lines=[]; cur=""
     for w in words:
         if len(cur)+len(w)+1 <= max_chars:
-            cur = (cur+" "+w).strip()
+            cur=(cur+" "+w).strip()
         else:
-            lines.append(cur); cur = w
+            lines.append(cur); cur=w
     if cur: lines.append(cur)
     return lines or [""]
 
-# ----------------------------
-# Default sample (ASCII-safe)
-# ----------------------------
-default_spec = {
-  "project": {"title": "LAMD Left Panel - IA & Flows", "author": "AEON Communications", "version": "v1.0"},
-  "canvas": {"width": 1600, "height": 900, "theme": {"bg":"#FAFAFC","ink":"#111","accent":"#2B6CB0","muted":"#999"}},
+# ---------- default spec ----------
+spec = {
+  "project": {"title": "LAMD Left Panel - IA & Flows"},
+  "canvas": {"width": 1600, "height": 900, "theme": {"bg":"#FAFAFC"}},
   "ia": {
-    "scope": ["Left Graphic Panel Only", "27\" FHD (1920x1080)", "Avoid red alerts", "Security labels required"],
+    "scope": ["Left Graphic Panel Only", "27\" FHD (1920x1080)", "Avoid red alerts"],
     "zones": [
       {"id": "Z5", "label": "System Status", "x": 40, "y": 80, "w": 1500, "h": 50, "fill":"#FFF7F0"},
       {"id": "Z2", "label": "Layer Controls", "x": 40, "y": 140, "w": 220, "h": 650, "fill":"#F3F7FF"},
@@ -92,142 +94,112 @@ default_spec = {
   }
 }
 
-# ----------------------------
-# Controls (zoom/height per section)
-# ----------------------------
+# ---------- controls ----------
 with st.sidebar:
-    st.header("Viewport Controls")
-    ia_zoom = st.slider("IA Zoom (%)", 50, 250, 100, 5)
-    ia_h = st.slider("IA Viewport Height (px)", 400, 1200, 700, 50)
-    fl_zoom = st.slider("Flow Zoom (%)", 50, 250, 100, 5)
-    fl_h = st.slider("Flow Viewport Height (px)", 400, 1200, 700, 50)
-    dc_zoom = st.slider("Decision Zoom (%)", 50, 250, 100, 5)
-    dc_h = st.slider("Decision Viewport Height (px)", 300, 1000, 500, 50)
+    st.header("Viewport")
+    zoom = st.slider("Zoom (%)", 50, 250, 100, 5)
+    height = st.slider("Viewport Height (px)", 400, 1400, 800, 50)
 
-# ----------------------------
-# Renderers
-# ----------------------------
-def render_ia(spec:Dict[str,Any]) -> Tuple[str, int, int]:
-    ia = spec.get("ia", {})
-    zones = ia.get("zones", [])
-    comps = ia.get("components", [])
-    scope_lines = ia.get("scope", [])
-    canv = spec.get("canvas", {})
-    W = int(canv.get("width", 1600)); H = int(canv.get("height", 900))
-    svg = [svg_header(W, H), rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
-    title = spec.get("project",{}).get("title","IA Diagram")
-    svg.append(text(32, 44, title, size=24, weight="600"))
-    svg.append(rect(28, 60, W-56, 70, rx=10, ry=10, fill="#FFFFFF", stroke="#D0D6E0"))
-    scope_txt = "  •  ".join(scope_lines)
-    svg.append(text(40, 96, "Scope: " + scope_txt, size=14, fill="#333"))
-    svg.append(text(32, 150, "Screen Zoning", size=18, weight="600"))
-    for z in zones:
-        zx,zy,zw,zh = int(z.get("x",0)), int(z.get("y",0)), int(z.get("w",100)), int(z.get("h",80))
-        fill = z.get("fill", "#F3F7FF")
-        svg.append(rect(zx,zy,zw,zh,rx=12,ry=12,fill=fill,stroke="#B8C2D6"))
-        svg.append(text(zx+10, zy+26, f"{z['id']} - {z.get('label','')}", size=14, weight="600"))
-    svg.append(text(W-420, 150, "Components (by Zone)", size=18, weight="600"))
-    y = 180
-    for c in comps:
-        svg.append(rect(W-440, y-18, 392, 36, rx=10, ry=10, fill="#FFFFFF", stroke="#E3E7EF"))
-        svg.append(text(W-430, y+4, f"[{c.get('zone','?')}] {c.get('title','')}", size=13, fill="#222"))
-        y += 44
-    svg.append(svg_footer())
-    return "".join(svg), W, H
-
-def render_flow_item(spec:Dict[str,Any], item:Dict[str,Any], y_offset:int, W:int) -> Tuple[str,int]:
-    lanes: List[str] = spec.get("flows",{}).get("lanes",["Flow"])
-    lane_h = 100
-    lane_gap = 10
-    svg=[]; lane_y={}
-    for i,l in enumerate(lanes):
-        y = y_offset + i*(lane_h+lane_gap)
-        lane_y[l]=y
-        svg.append(rect(28, y, W-56, lane_h, rx=12, ry=12, fill="#FBFCFF", stroke="#E1E6F0"))
-        svg.append(text(40, y+24, l, size=14, fill="#4A5568", weight="600"))
-    steps: List[Dict[str,Any]] = item.get("steps",[])
-    cols = max(3, len(steps))
-    col_w = (W-180)/cols
-    nodes=[]
-    for idx, s in enumerate(steps):
-        lane = s.get("lane", lanes[min(idx,len(lanes)-1)])
-        y = lane_y.get(lane, y_offset) + lane_h/2
-        x = 100 + col_w*(idx+0.5)
-        svg.append(rect(x-120, y-26, 240, 52, rx=12, ry=12, fill="#FFFFFF", stroke="#A0AEC0"))
-        lines = wrap_lines(s.get("text",""), 28)
-        for j,ln in enumerate(lines[:2]):
-            svg.append(text(x, y-6+16*j, ln, anchor="middle", size=14))
-        out = s.get("out","")
-        if out:
-            svg.append(text(x, y+28, f"-> {out}", anchor="middle", size=12, fill="#555"))
-        nodes.append((x,y))
-        if idx>0:
-            px,py = nodes[idx-1]
-            svg.append(arrow(px+120, py, x-120, y, "#6B7280"))
-    svg.insert(0, text(32, y_offset-12, f"{item.get('id','FLOW')} - {item.get('name','')}", size=18, weight="700"))
-    return "".join(svg), y_offset + len(lanes)*(lane_h+lane_gap) + 50
-
-def render_flows(spec:Dict[str,Any]) -> Tuple[str,int,int]:
-    canv = spec.get("canvas", {})
+# ---------- IA renderer ----------
+def render_ia(s:Dict[str,Any]) -> Tuple[str,int,int]:
+    canv = s.get("canvas", {})
     W = int(canv.get("width",1600)); H = int(canv.get("height",900))
-    items: List[Dict[str,Any]] = spec.get("flows",{}).get("items",[])
-    svg=[svg_header(W, H), rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
+    ia = s.get("ia", {}); zones = ia.get("zones", []); comps = ia.get("components", [])
+    scope = ia.get("scope", [])
+    g = []
+    g.append(text(32, 36, s.get("project",{}).get("title","IA"), size=24, weight="600"))
+    g.append(rect(28, 48, W-56, 70, rx=10, ry=10, fill="#FFFFFF", stroke="#D0D6E0"))
+    g.append(text(40, 90, "Scope: " + " | ".join(scope), size=14))
+    g.append(text(32, 140, "Screen Zoning", size=18, weight="600"))
+    for z in zones:
+        g.append(rect(z["x"], z["y"], z["w"], z["h"], rx=12, ry=12, fill=z.get("fill","#F3F7FF"), stroke="#B8C2D6"))
+        g.append(text(z["x"]+10, z["y"]+26, f'{z["id"]} - {z["label"]}', size=14, weight="600"))
+    # components legend right
+    x_leg = W-420; y=160
+    g.append(text(x_leg, 140, "Components (by Zone)", size=18, weight="600"))
+    for c in comps:
+        g.append(rect(x_leg-20, y-18, 392, 36, rx=10, ry=10, fill="#FFFFFF", stroke="#E3E7EF"))
+        g.append(text(x_leg-10, y+4, f'[{c["zone"]}] {c["title"]}', size=13))
+        y += 44
+    inner = "".join(g)
+    svg = svg_skeleton(W, H, inner, margin=160, bg=canv.get("theme",{}).get("bg","#FAFAFC"))
+    return svg, W+320, H+320
+
+# ---------- Flow renderer ----------
+def render_flows(s:Dict[str,Any]) -> Tuple[str,int,int]:
+    canv = s.get("canvas", {})
+    W = int(canv.get("width",1600)); baseH = int(canv.get("height",900))
+    lanes = s.get("flows",{}).get("lanes",["Flow"])
+    items = s.get("flows",{}).get("items",[])
+
+    lane_h=110; lane_gap=12
     y = 70
-    svg.append(text(32, 40, "Flows (Swimlanes)", size=22, weight="600"))
+    g=[text(32, 40, "Flows (Swimlanes)", size=22, weight="600")]
     for it in items:
-        block, y = render_flow_item(spec, it, y+30, W)
-        svg.append(block)
-        y += 20
-    svg.append(svg_footer())
-    return "".join(svg), W, max(H, y+60)
+        g.append(text(32, y-12, f'{it.get("id","FLOW")} - {it.get("name","")}', size=18, weight="700"))
+        lane_y={}
+        for i,l in enumerate(lanes):
+            yy = y + i*(lane_h+lane_gap); lane_y[l]=yy
+            g.append(rect(28, yy, W-56, lane_h, rx=12, ry=12, fill="#FBFCFF", stroke="#E1E6F0"))
+            g.append(text(40, yy+24, l, size=14, weight="600"))
+        steps = it.get("steps",[]); cols=max(3, len(steps)); col_w=(W-180)/cols; nodes=[]
+        for idx, stp in enumerate(steps):
+            lane = stp.get("lane", lanes[min(idx,len(lanes)-1)])
+            cy = lane_y[lane] + lane_h/2
+            cx = 100 + col_w*(idx+0.5)
+            g.append(rect(cx-120, cy-26, 240, 52, rx=12, ry=12, fill="#FFFFFF", stroke="#A0AEC0"))
+            for j,ln in enumerate(wrap_lines(stp.get("text",""), 28)[:2]):
+                g.append(text(cx, cy-6+16*j, ln, anchor="middle", size=14))
+            if stp.get("out"): g.append(text(cx, cy+28, "-> "+stp["out"], anchor="middle", size=12))
+            if nodes:
+                px,py=nodes[-1]; g.append(arrow(px+120, py, cx-120, cy, "#6B7280"))
+            nodes.append((cx,cy))
+        y = y + len(lanes)*(lane_h+lane_gap) + 60
+    H = max(baseH, y+40)
+    inner = "".join(g)
+    svg = svg_skeleton(W, H, inner, margin=160, bg=canv.get("theme",{}).get("bg","#FAFAFC"))
+    return svg, W+320, H+320
 
-def render_decisions(spec:Dict[str,Any]) -> Tuple[str,int,int]:
-    decs = spec.get("flows",{}).get("decisions",[])
-    canv = spec.get("canvas", {}); W = int(canv.get("width",1600))
-    rows = max(1, len(decs))
-    H = 140 + rows*110
-    svg=[svg_header(W, H), rect(0,0,W,H,0,0,fill=spec.get("canvas",{}).get("theme",{}).get("bg","#FAFAFA"), stroke="#EEE", sw=0.5)]
-    svg.append(text(32, 40, "Decision Points", size=22, weight="600"))
+# ---------- Decisions ----------
+def render_decisions(s:Dict[str,Any]) -> Tuple[str,int,int]:
+    canv = s.get("canvas", {}); W = int(canv.get("width",1600))
+    decs = s.get("flows",{}).get("decisions",[])
+    rows=max(1,len(decs)); H=140+rows*120
+    g=[text(32, 40, "Decision Points", size=22, weight="600")]
     for i,d in enumerate(decs):
-        y = 110 + i*110
-        cx = 260
-        svg.append(diamond(cx, y, 200, 80))
-        svg.append(text(cx, y-8, d.get("id","D-?"), anchor="middle", size=14, weight="700"))
-        svg.append(text(cx, y+18, d.get("cond",""), anchor="middle", size=12))
-        svg.append(rect(cx+260, y-26, 300, 52, rx=12, ry=12, fill="#EFFFF5", stroke="#49A36B"))
-        svg.append(text(cx+410, y+6, d.get("yes",""), anchor="middle", size=13))
-        svg.append(arrow(cx+100, y, cx+260, y, "#4A9"))
-        svg.append(rect(cx-560, y-26, 300, 52, rx=12, ry=12, fill="#FFF5F5", stroke="#CC6666"))
-        svg.append(text(cx-410, y+6, d.get("no",""), anchor="middle", size=13))
-        svg.append(arrow(cx-100, y, cx-260, y, "#C66"))
-    svg.append(svg_footer())
-    return "".join(svg), W, H
+        y = 120 + i*120; cx=280
+        g.append(diamond(cx, y, 200, 80))
+        g.append(text(cx, y-8, d.get("id","D-?"), anchor="middle", size=14, weight="700"))
+        g.append(text(cx, y+18, d.get("cond",""), anchor="middle", size=12))
+        g.append(rect(cx+300, y-26, 320, 52, rx=12, ry=12, fill="#EFFFF5", stroke="#49A36B"))
+        g.append(text(cx+460, y+6, d.get("yes",""), anchor="middle", size=13))
+        g.append(arrow(cx+100, y, cx+300, y, "#4A9"))
+        g.append(rect(cx-620, y-26, 320, 52, rx=12, ry=12, fill="#FFF5F5", stroke="#CC6666"))
+        g.append(text(cx-460, y+6, d.get("no",""), anchor="middle", size=13))
+        g.append(arrow(cx-100, y, cx-300, y, "#C66"))
+    inner="".join(g)
+    svg = svg_skeleton(W, H, inner, margin=160, bg=canv.get("theme",{}).get("bg","#FAFAFC"))
+    return svg, W+320, H+320
 
-def show_svg(svg_text:str, width:int, height:int, zoom:int, viewport_h:int, key:str):
-    scale = zoom / 100.0
-    # Outer scrollable box (full width), inner scaled canvas
+# ---------- view ----------
+def viewport(svg_text:str, w:int, h:int, zoom:int, height:int):
+    scale = zoom/100.0
     html = f'''
-    <div style="width:100%; border:1px solid #e3e3e3; border-radius:10px; background:#fff; overflow:auto; height:{viewport_h}px;">
-      <div style="transform: scale({scale}); transform-origin: top left; width:{width}px; height:{height}px;">
+    <div style="width:100%; border:1px solid #e3e3e3; border-radius:10px; background:#fff; overflow:auto; height:{height}px;">
+      <div style="transform: scale({scale}); transform-origin: top left; width:{w}px; height:{h}px;">
         {svg_text}
       </div>
-    </div>
-    '''
-    st_html(html, height=viewport_h+20)
+    </div>'''
+    st_html(html, height=height+20)
 
-# ----------------------------
-# Render sections with controls
-# ----------------------------
-spec = default_spec  # could add JSON input later if needed
+st.markdown("### IA Diagram")
+svg_ia, w1, h1 = render_ia(spec)
+viewport(svg_ia, w1, h1, zoom, height)
 
-st.markdown("### IA Diagram (PPT style)")
-svg_ia, W_ia, H_ia = render_ia(spec)
-show_svg(svg_ia, W_ia, H_ia, ia_zoom, ia_h, key="ia")
+st.markdown("### Flow Diagram")
+svg_fl, w2, h2 = render_flows(spec)
+viewport(svg_fl, w2, h2, zoom, height)
 
-st.markdown("### Flow Diagram (PPT style, Swimlanes)")
-svg_flow, W_fl, H_fl = render_flows(spec)
-show_svg(svg_flow, W_fl, H_fl, fl_zoom, fl_h, key="flow")
-
-st.markdown("### Decision Points (Yes/No)")
-svg_dec, W_dc, H_dc = render_decisions(spec)
-show_svg(svg_dec, W_dc, H_dc, dc_zoom, dc_h, key="dec")
+st.markdown("### Decision Points")
+svg_dc, w3, h3 = render_decisions(spec)
+viewport(svg_dc, w3, h3, zoom, height)
